@@ -1,4 +1,4 @@
-# TodayInHistoryLocal
+# Today In History Email => Document
 
 This repository turns a Google Takeout Gmail export for the `School` label into:
 
