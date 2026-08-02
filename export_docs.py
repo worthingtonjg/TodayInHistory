@@ -727,6 +727,11 @@ def main() -> int:
         default=None,
         help="Optional cap for The Retrospect docs. Omit to generate all.",
     )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip DOCX files that already exist in the output folder.",
+    )
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
@@ -745,6 +750,10 @@ def main() -> int:
                 raise SystemExit(f"Invalid limit for {kind}: {kind_limit}")
             messages = messages[:kind_limit]
         for message in messages:
+            path = output_path_for(message, output_dir)
+            if args.skip_existing and path.exists():
+                print(f"Skipping {path}")
+                continue
             path = write_document(message, output_dir)
             total += 1
             print(path)
