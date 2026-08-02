@@ -503,6 +503,16 @@ def choose_best_image_bytes(url: Optional[str]) -> Optional[bytes]:
     return normalize_image_bytes_for_docx(data)
 
 
+def require_image_bytes(url: Optional[str], description: str, record: JsonMessage) -> bytes:
+    data = choose_best_image_bytes(url)
+    if data is None:
+        raise ValueError(
+            f"Missing required {description} image "
+            f"(subject={record.subject!r}, event_title={record.event_title!r})"
+        )
+    return data
+
+
 def add_table_row_text(cell, text: str, family: str, size: int, bold: bool = False, color: str = "000000", align=WD_ALIGN_PARAGRAPH.LEFT) -> None:
     cell.text = ""
     paragraph = cell.paragraphs[0]
@@ -546,13 +556,8 @@ def add_back_then_banner(document: Document, record: JsonMessage, available_widt
     set_paragraph_format(paragraph, before=0, after=0)
 
     logo_url = pick_back_then_logo_url(record)
-    logo_bytes = choose_best_image_bytes(logo_url)
-    if logo_bytes:
-        add_picture_from_bytes(paragraph, logo_bytes, 190 / 96.0)
-        return
-
-    run = paragraph.add_run("BACK THEN HISTORY")
-    set_run_font(run, "Arial", 11, bold=True, color="FFFFFF")
+    logo_bytes = require_image_bytes(logo_url, "Back Then History logo", record)
+    add_picture_from_bytes(paragraph, logo_bytes, 190 / 96.0)
 
 
 def body_paragraphs_for_retrospect(record: JsonMessage) -> list[str]:
@@ -597,9 +602,8 @@ def render_retrospect(document: Document, record: JsonMessage, available_width_i
     add_retrospect_date_bar(document, banner_date, available_width_inches)
 
     logo_url = pick_retrospect_logo_url(record)
-    logo_bytes = choose_best_image_bytes(logo_url)
-    if logo_bytes:
-        add_centered_image(document, logo_bytes, 220 / 96.0, space_after=0)
+    logo_bytes = require_image_bytes(logo_url, "Retrospect logo", record)
+    add_centered_image(document, logo_bytes, 220 / 96.0, space_after=0)
 
     add_horizontal_rule(document)
 
@@ -616,9 +620,11 @@ def render_retrospect(document: Document, record: JsonMessage, available_width_i
     set_run_font(run, "Arial", 22, bold=True, color="6f93ad")
 
     main_urls = pick_retrospect_main_image_urls(record)
-    image_bytes = None
-    if main_urls:
-        image_bytes = choose_best_image_bytes(main_urls[0])
+    image_bytes = require_image_bytes(
+        main_urls[0] if main_urls else None,
+        "Retrospect article",
+        record,
+    )
 
     article_paragraphs = body_paragraphs_for_retrospect(record)
     compressed = compress_text("\n\n".join(article_paragraphs))
@@ -641,8 +647,11 @@ def render_back_then(document: Document, record: JsonMessage, available_width_in
     set_run_font(run, "Arial", 22, bold=True, color="ef3b3a")
 
     article_url = pick_back_then_article_image_url(record)
-    image_bytes = None
-    image_bytes = choose_best_image_bytes(article_url)
+    image_bytes = require_image_bytes(
+        article_url,
+        "Back Then History article",
+        record,
+    )
 
     article_paragraphs = body_paragraphs_for_back_then(record)
     compressed = compress_text("\n\n".join(article_paragraphs))
@@ -708,6 +717,16 @@ def write_document(record: JsonMessage, output_dir: Path) -> Path:
     return path
 
 
+def write_failed_log(output_dir: Path, failures: list[str]) -> Path:
+    path = output_dir / "failed.log"
+    if failures:
+        body = "\n".join(failures) + "\n"
+    else:
+        body = "No failures.\n"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate DOCX files from the grouped newsletter JSON export.")
     parser.add_argument(
@@ -739,6 +758,7 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     total = 0
+    failures: list[str] = []
     for kind in TYPE_ORDER:
         json_path = input_dir / f"{TYPE_TO_FOLDER[kind]}.json"
         if not json_path.exists():
@@ -752,13 +772,20 @@ def main() -> int:
         for message in messages:
             path = output_path_for(message, output_dir)
             if args.skip_existing and path.exists():
-                print(f"Skipping {path}")
+                print(f"Already exists {path}")
                 continue
-            path = write_document(message, output_dir)
+            try:
+                path = write_document(message, output_dir)
+            except Exception as exc:
+                failures.append(f"{path} | {message.subject} | {exc}")
+                print(f"FAILED {path}: {exc}")
+                continue
             total += 1
             print(path)
+    failed_log = write_failed_log(output_dir, failures)
     print(f"Wrote {total} documents to {output_dir}")
-    return 0
+    print(f"Wrote failure log to {failed_log}")
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
